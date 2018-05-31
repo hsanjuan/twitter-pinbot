@@ -264,7 +264,7 @@ func (b *Bot) tweet(msg string, origTweet *twitter.Tweet) {
 	var err error
 	if origTweet != nil {
 		_, _, err = b.twClient.Statuses.Update(
-			fmt.Sprintf("%s", msg),
+			fmt.Sprintf("@%s %s", origTweet.ScreenName, msg),
 			&twitter.StatusUpdateParams{
 				InReplyToStatusID: origTweet.ID},
 		)
