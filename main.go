@@ -169,7 +169,7 @@ func (b *Bot) parseTweet(msg string) (action, *cid.Cid, string, error) {
 		return noAction, nil, "", nil
 	}
 
-	if words[0] != b.name {
+	if strings.ToLower(words[0]) != strings.ToLower(b.name) {
 		return noAction, nil, "", nil
 	}
 
