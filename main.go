@@ -139,7 +139,7 @@ func (b *Bot) fetchFollowing() {
 	following, _, err := b.twClient.Friends.List(
 		&twitter.FriendListParams{})
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
 	}
 	for _, u := range following.Users {
 		log.Println("follwing:", u.ScreenName)
@@ -209,7 +209,7 @@ func (b *Bot) watchTweets() {
 
 	stream, err := b.twClient.Streams.Filter(params)
 	if err != nil {
-		log.Fatal(err)
+		log.Error(err)
 	}
 
 	demux := twitter.NewSwitchDemux()
@@ -229,12 +229,6 @@ func (b *Bot) processTweet(tweet *twitter.Tweet) {
 	log.Printf("%+v\n", tweet.Text)
 	//log.Printf("%+v\n", tweet.User)
 
-	_, ok := b.follows.Load(tweet.User.ID)
-	if !ok {
-		b.tweet("Sorry but I don't follow you yet", tweet)
-		return
-	}
-
 	action, c, name, err := b.parseTweet(tweet.Text)
 	//log.Println(action, c, name, err)
 	if err != nil {
@@ -242,6 +236,12 @@ func (b *Bot) processTweet(tweet *twitter.Tweet) {
 	}
 
 	if action == noAction {
+		return
+	}
+
+	_, ok := b.follows.Load(tweet.User.ID)
+	if !ok {
+		b.tweet("Sorry but I don't follow you yet", tweet)
 		return
 	}
 
