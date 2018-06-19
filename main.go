@@ -114,8 +114,8 @@ func New(cfg *Config) (*Bot, error) {
 		id:            cfg.TwitterID,
 	}
 
-	//bot.fetchFollowing()
-	//go bot.watchFollowing()
+	bot.fetchFollowing()
+	go bot.watchFollowing()
 	go bot.watchTweets()
 	return bot, nil
 }
@@ -181,6 +181,8 @@ func (b *Bot) parseTweet(msg string) (action, *cid.Cid, string, error) {
 	case "unpin":
 		return noAction, nil, "", nil // let's not support it yet
 		// action = unpin
+	default:
+		return noAction, nil, "", nil
 	}
 
 	c, err := cid.Decode(words[2])
@@ -200,7 +202,7 @@ func (b *Bot) watchTweets() {
 	log.Println("watching tweets")
 
 	params := &twitter.StreamFilterParams{
-		Follow:        []string{b.id},
+		Follow:        []string{},
 		StallWarnings: twitter.Bool(true),
 	}
 
@@ -225,6 +227,13 @@ func (b *Bot) watchTweets() {
 func (b *Bot) processTweet(tweet *twitter.Tweet) {
 	log.Printf("%+v\n", tweet.Text)
 	//log.Printf("%+v\n", tweet.User)
+
+	_, ok := b.follows.Load(tweet.User.ID)
+	if !ok {
+		b.tweet("Sorry but I don't follow you yet", tweet)
+		return
+	}
+
 	action, c, name, err := b.parseTweet(tweet.Text)
 	//log.Println(action, c, name, err)
 	if err != nil {
