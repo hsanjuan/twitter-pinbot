@@ -142,6 +142,7 @@ func (b *Bot) fetchFollowing() {
 		log.Fatal(err)
 	}
 	for _, u := range following.Users {
+		log.Println("follwing:", u.ScreenName)
 		b.follows.Store(u.ID, struct{}{})
 	}
 }
@@ -153,7 +154,7 @@ func (b *Bot) watchFollowing() {
 		default:
 			b.fetchFollowing()
 		}
-		time.Sleep(30 * time.Second)
+		time.Sleep(60 * time.Second)
 	}
 }
 
@@ -202,7 +203,7 @@ func (b *Bot) watchTweets() {
 	log.Println("watching tweets")
 
 	params := &twitter.StreamFilterParams{
-		Follow:        []string{},
+		Follow:        []string{b.id},
 		StallWarnings: twitter.Bool(true),
 	}
 
