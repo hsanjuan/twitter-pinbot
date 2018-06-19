@@ -209,7 +209,7 @@ func (b *Bot) watchTweets() {
 
 	stream, err := b.twClient.Streams.Filter(params)
 	if err != nil {
-		log.Error(err)
+		log.Println(err)
 	}
 
 	demux := twitter.NewSwitchDemux()
