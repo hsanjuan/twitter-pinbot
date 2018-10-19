@@ -196,8 +196,20 @@ func (b *Bot) watchFollowing() {
 }
 
 func (b *Bot) parseTweet(tweet *twitter.Tweet) (Action, string, []string, error) {
+	// Extended tweet? let's use the entities from the extended tweet then.
+	if tweet.ExtendedTweet != nil {
+		tweet.Entities = tweet.ExtendedTweet.Entities
+		tweet.ExtendedEntities = tweet.ExtendedTweet.ExtendedEntities
+		tweet.FullText = tweet.ExtendedTweet.FullText
+
+	}
+	text := tweet.FullText
+	if text == "" {
+		text = tweet.Text
+	}
+
 	// remote our username if they started with it
-	text := strings.TrimPrefix(tweet.Text, b.name)
+	text = strings.TrimPrefix(text, b.name)
 	var action Action
 	var arguments string
 
