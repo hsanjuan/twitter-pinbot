@@ -332,12 +332,19 @@ func (b *Bot) processTweet(tweet *twitter.Tweet) {
 		}
 	}
 
-	if quote := tweet.QuotedStatus; quote != nil {
-		// process the QuotedStatus as if it was from original user
-		quote.User.ID = tweet.User.ID
-		quote.User.ScreenName = tweet.User.ScreenName
-		quote.ID = tweet.ID
-		b.processTweet(quote)
+	// If the tweet has retweets, process them as if they were
+	// from this user.
+	retweets := []*twitter.Tweet{tweet.QuotedStatus, tweet.RetweetedStatus}
+	for _, rt := range retweets {
+		if rt == nil {
+			continue
+		}
+
+		// process the retweet as if it was from original user
+		rt.User.ID = tweet.User.ID
+		rt.User.ScreenName = tweet.User.ScreenName
+		rt.ID = tweet.ID
+		b.processTweet(rt)
 	}
 }
 
