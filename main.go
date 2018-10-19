@@ -125,7 +125,7 @@ func New(cfg *Config) (*Bot, error) {
 		APIAddr:  peerAddr,
 		Username: cfg.ClusterUsername,
 		Password: cfg.ClusterPassword,
-		LogLevel: "debug",
+		LogLevel: "info",
 	})
 
 	if err != nil {
@@ -177,7 +177,7 @@ func (b *Bot) fetchFollowing() {
 			log.Println(err)
 		}
 		for _, u := range following.Users {
-			log.Println("following:", u.ScreenName)
+			//log.Println("following:", u.ScreenName)
 			b.follows.Store(u.ID, struct{}{})
 		}
 		nextCursor = following.NextCursor
@@ -200,6 +200,10 @@ func (b *Bot) parseTweet(tweet *twitter.Tweet) (Action, string, []string, error)
 	text := strings.TrimPrefix(tweet.Text, b.name)
 	var action Action
 	var arguments string
+
+	if text == string(HelpAction) {
+		return HelpAction, "", []string{}, nil
+	}
 
 	// match to see if any action
 	matches := actionRegexp.FindAllStringSubmatch(text, -1)
