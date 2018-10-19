@@ -220,6 +220,11 @@ func extractMediaURLs(tweet *twitter.Tweet) []string {
 		for _, media := range tweet.ExtendedEntities.Media {
 			urls = append(urls, extractMediaURL(&media))
 		}
+	} else if tweet.Entities != nil && tweet.Entities.Media != nil {
+		// If no extended entitites, try with traditional.
+		for _, media := range tweet.Entities.Media {
+			urls = append(urls, extractMediaURL(&media))
+		}
 	}
 	return urls
 
