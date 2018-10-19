@@ -220,7 +220,9 @@ func (b *Bot) parseTweet(tweet *twitter.Tweet) (Action, string, []string, error)
 func extractMediaURLs(tweet *twitter.Tweet) []string {
 	var urls []string
 	// Grab any media entities from the tweet
-	if tweet.ExtendedEntities != nil && tweet.ExtendedEntities.Media != nil {
+	if tweet.ExtendedEntities != nil &&
+		tweet.ExtendedEntities.Media != nil &&
+		len(tweet.ExtendedEntities.Media) > 0 {
 		for _, media := range tweet.ExtendedEntities.Media {
 			urls = append(urls, extractMediaURL(&media))
 		}
