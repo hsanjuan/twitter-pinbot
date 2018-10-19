@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -199,7 +200,6 @@ func (b *Bot) parseTweet(tweet *twitter.Tweet) (Action, string, []string, error)
 	text := strings.TrimPrefix(tweet.Text, b.name)
 	var action Action
 	var arguments string
-	var urls []string
 
 	// match to see if any action
 	matches := actionRegexp.FindAllStringSubmatch(text, -1)
@@ -209,13 +209,39 @@ func (b *Bot) parseTweet(tweet *twitter.Tweet) (Action, string, []string, error)
 		arguments = firstMatch[2]      // second group match
 	}
 
+	urls := extractMediaURLs(tweet)
+	return action, arguments, urls, nil
+}
+
+func extractMediaURLs(tweet *twitter.Tweet) []string {
+	var urls []string
 	// Grab any media entities from the tweet
 	if tweet.ExtendedEntities != nil && tweet.ExtendedEntities.Media != nil {
 		for _, media := range tweet.ExtendedEntities.Media {
-			urls = append(urls, media.MediaURL)
+			urls = append(urls, extractMediaURL(&media))
 		}
 	}
-	return action, arguments, urls, nil
+	return urls
+
+}
+
+type byBitrate []twitter.VideoVariant
+
+func (vv byBitrate) Len() int           { return len(vv) }
+func (vv byBitrate) Swap(i, j int)      { vv[i], vv[j] = vv[j], vv[i] }
+func (vv byBitrate) Less(i, j int) bool { return vv[i].Bitrate < vv[j].Bitrate }
+
+func extractMediaURL(me *twitter.MediaEntity) string {
+	switch me.Type {
+	case "video", "animated_gif":
+		variants := me.VideoInfo.Variants
+		sort.Sort(byBitrate(variants))
+		// pick video with highest bitrate
+		last := variants[len(variants)-1]
+		return last.URL
+	default:
+		return me.MediaURL
+	}
 }
 
 func (b *Bot) watchTweets() {
@@ -304,6 +330,14 @@ func (b *Bot) processTweet(tweet *twitter.Tweet) {
 		if err != nil {
 			log.Println(err)
 		}
+	}
+
+	if quote := tweet.QuotedStatus; quote != nil {
+		// process the QuotedStatus as if it was from original user
+		quote.User.ID = tweet.User.ID
+		quote.User.ScreenName = tweet.User.ScreenName
+		quote.ID = tweet.ID
+		b.processTweet(quote)
 	}
 }
 
