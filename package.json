@@ -1,0 +1,24 @@
+{
+  "author": "hsanjuan",
+  "bugs": {
+    "url": "https://github.com/hsanjuan/twitter-pinbot"
+  },
+  "gx": {
+    "dvcsimport": "github.com/hsanjuan/twitter-pinbot"
+  },
+  "gxDependencies": [
+    {
+      "author": "hsanjuan",
+      "hash": "QmUY1LMFsjmVn1prwerDFJyGpbatfbABj7xGmSCQTL56bM",
+      "name": "ipfs-cluster",
+      "version": "0.6.0"
+    }
+  ],
+  "gxVersion": "0.14.0",
+  "language": "go",
+  "license": "MIT",
+  "name": "twitter-pinbot",
+  "releaseCmd": "git commit -a -m \"gx publish $VERSION\"",
+  "version": "0.0.0"
+}
+

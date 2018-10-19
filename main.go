@@ -7,31 +7,55 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/dghubble/go-twitter/twitter"
-	"github.com/dghubble/oauth1"
 	cid "github.com/ipfs/go-cid"
-	clusterapi "github.com/ipfs/ipfs-cluster/api"
+	"github.com/ipfs/ipfs-cluster/api"
 	"github.com/ipfs/ipfs-cluster/api/rest/client"
 	multiaddr "github.com/multiformats/go-multiaddr"
+
+	"github.com/dghubble/go-twitter/twitter"
+	"github.com/dghubble/oauth1"
 )
 
 // ConfigFile is the path of the default configuration file
 var ConfigFile = "config.json"
 
-const (
-	noAction action = iota
-	pin
-	unpin
+// Gateway
+var IPFSGateway = "https://ipfs.io"
+
+type Action string
+
+// Variables containing the different available actions
+var (
+	// (spaces)(action)whitespaces(arguments)
+	actionRegexp = regexp.MustCompile(`^\s*([[:graph:]]+)\s+(.+)$`)
+	// (cid)whitespaces(name)
+	pinRegexp          = regexp.MustCompile(`([[:graph:]]+)\s+([[:graph:]]+)$`)
+	PinAction   Action = "!pin"
+	UnpinAction Action = "!unpin"
+	AddAction   Action = "!add"
+	HelpAction  Action = "!help"
 )
 
-type action int
+func (a Action) Valid() bool {
+	switch a {
+	case PinAction, UnpinAction, AddAction, HelpAction:
+		return true
+	}
+	return false
+}
+
+func (a Action) String() string {
+	return string(a)
+}
 
 // Config is the configuration format for the Twitter Pinbot
 type Config struct {
@@ -73,9 +97,11 @@ type Bot struct {
 	name          string
 	id            string
 	twClient      *twitter.Client
-	clusterClient *client.Client
+	clusterClient client.Client
 
 	follows sync.Map
+
+	die chan struct{}
 }
 
 // New creates a new Bot with the Config.
@@ -94,10 +120,11 @@ func New(cfg *Config) (*Bot, error) {
 		cancel()
 		return nil, err
 	}
-	clusterClient, err := client.NewClient(&client.Config{
-		PeerAddr: peerAddr,
+	clusterClient, err := client.NewDefaultClient(&client.Config{
+		APIAddr:  peerAddr,
 		Username: cfg.ClusterUsername,
 		Password: cfg.ClusterPassword,
+		LogLevel: "debug",
 	})
 
 	if err != nil {
@@ -112,6 +139,7 @@ func New(cfg *Config) (*Bot, error) {
 		clusterClient: clusterClient,
 		name:          cfg.TwitterName,
 		id:            cfg.TwitterID,
+		die:           make(chan struct{}, 1),
 	}
 
 	bot.fetchFollowing()
@@ -136,74 +164,71 @@ func (b *Bot) ID() string {
 }
 
 func (b *Bot) fetchFollowing() {
-	following, _, err := b.twClient.Friends.List(
-		&twitter.FriendListParams{})
-	if err != nil {
-		log.Println(err)
-	}
-	for _, u := range following.Users {
-		log.Println("follwing:", u.ScreenName)
-		b.follows.Store(u.ID, struct{}{})
+	var nextCursor int64 = -1
+	includeEntities := false
+	for nextCursor != 0 {
+		following, _, err := b.twClient.Friends.List(
+			&twitter.FriendListParams{
+				Count:               200,
+				IncludeUserEntities: &includeEntities,
+			})
+		if err != nil {
+			log.Println(err)
+		}
+		for _, u := range following.Users {
+			log.Println("following:", u.ScreenName)
+			b.follows.Store(u.ID, struct{}{})
+		}
+		nextCursor = following.NextCursor
 	}
 }
 
 func (b *Bot) watchFollowing() {
 	for {
+		time.Sleep(90 * time.Second)
 		select {
 		case <-b.ctx.Done():
 		default:
 			b.fetchFollowing()
 		}
-		time.Sleep(60 * time.Second)
 	}
 }
 
-func (b *Bot) parseTweet(msg string) (action, *cid.Cid, string, error) {
-	lines := strings.Split(msg, "\n")
-	if len(lines) < 1 {
-		return noAction, nil, "", nil
+func (b *Bot) parseTweet(tweet *twitter.Tweet) (Action, string, []string, error) {
+	// remote our username if they started with it
+	text := strings.TrimPrefix(tweet.Text, b.name)
+	var action Action
+	var arguments string
+	var urls []string
+
+	// match to see if any action
+	matches := actionRegexp.FindAllStringSubmatch(text, -1)
+	if len(matches) > 0 {
+		firstMatch := matches[0]
+		action = Action(firstMatch[1]) // first group match
+		arguments = firstMatch[2]      // second group match
 	}
 
-	words := strings.Split(strings.Replace(lines[0], ":", " ", -1), " ")
-
-	if len(words) < 3 {
-		return noAction, nil, "", nil
+	// Grab any media entities from the tweet
+	if tweet.ExtendedEntities != nil && tweet.ExtendedEntities.Media != nil {
+		for _, media := range tweet.ExtendedEntities.Media {
+			urls = append(urls, media.MediaURL)
+		}
 	}
-
-	if strings.ToLower(words[0]) != strings.ToLower(b.name) {
-		return noAction, nil, "", nil
-	}
-
-	action := noAction
-
-	switch words[1] {
-	case "pin":
-		action = pin
-	case "unpin":
-		return noAction, nil, "", nil // let's not support it yet
-		// action = unpin
-	default:
-		return noAction, nil, "", nil
-	}
-
-	c, err := cid.Decode(words[2])
-	if err != nil {
-		return noAction, nil, "", err
-	}
-
-	name := ""
-	if len(words) >= 3 {
-		name = strings.Join(words[3:], " ")
-	}
-
-	return action, c, name, nil
+	return action, arguments, urls, nil
 }
 
 func (b *Bot) watchTweets() {
 	log.Println("watching tweets")
 
 	params := &twitter.StreamFilterParams{
-		Follow:        []string{b.id},
+		Follow: []string{b.id},
+		Track: []string{
+			PinAction.String(),
+			UnpinAction.String(),
+			HelpAction.String(),
+			AddAction.String(),
+		},
 		StallWarnings: twitter.Bool(true),
 	}
 
@@ -226,65 +251,222 @@ func (b *Bot) watchTweets() {
 }
 
 func (b *Bot) processTweet(tweet *twitter.Tweet) {
-	log.Printf("%+v\n", tweet.Text)
+	log.Printf("Parsing %+v\n", tweet.Text)
 	//log.Printf("%+v\n", tweet.User)
 
-	action, c, name, err := b.parseTweet(tweet.Text)
-	//log.Println(action, c, name, err)
+	action, arguments, urls, err := b.parseTweet(tweet)
 	if err != nil {
 		b.tweet(err.Error(), tweet)
-	}
-
-	if action == noAction {
 		return
 	}
 
+	log.Printf("Parsed: %s, %s, %s\n", action, arguments, urls)
+
 	_, ok := b.follows.Load(tweet.User.ID)
-	if !ok {
+	if !ok && action.Valid() {
 		b.tweet("Sorry but I don't follow you yet", tweet)
 		return
 	}
+	// We follow the user. We do stuff.
 
-	var target clusterapi.TrackerStatus = clusterapi.TrackerStatusPinned
-
+	// Process actions
 	switch action {
-	case pin:
-		log.Println("pin", c)
-		b.clusterClient.Pin(c, 0, 0, name)
-	case unpin:
-		log.Println("unpin", c)
-		b.clusterClient.Unpin(c)
-		target = clusterapi.TrackerStatusUnpinned
+	case PinAction:
+		b.pin(arguments, tweet)
+	case UnpinAction:
+		b.unpin(arguments, tweet)
+	case AddAction:
+		b.add(arguments, tweet)
+	case HelpAction:
+		b.tweetHelp(tweet)
+	default:
+		log.Println("no handled action for this tweet")
 	}
 
-	_, err = b.clusterClient.WaitFor(b.ctx, client.StatusFilterParams{
+	// Add any media urls
+	if len(urls) > 0 {
+		log.Println("adding media: ", urls)
+		out := make(chan *api.AddedOutput, 1)
+		go func() {
+			cids := []string{}
+			for added := range out {
+				log.Printf("added %s\n", added.Hash)
+				cids = append(cids, added.Hash)
+			}
+			if len(cids) > 0 {
+				b.tweetAdded(cids, tweet)
+			}
+		}()
+		params := api.DefaultAddParams()
+		params.Wrap = true
+		params.Name = "Tweet-" + tweet.IDStr
+		err := b.clusterClient.Add(urls, params, out)
+		if err != nil {
+			log.Println(err)
+		}
+	}
+}
+
+func (b *Bot) pin(args string, tweet *twitter.Tweet) {
+	log.Println("pin with ", args)
+	pinUsage := fmt.Sprintf("Usage: '%s <cid> <name>'", PinAction)
+
+	matches := pinRegexp.FindAllStringSubmatch(args, -1)
+	if len(matches) == 0 {
+		b.tweet(pinUsage, tweet)
+		return
+	}
+
+	firstMatch := matches[0]
+	cidStr := firstMatch[1]
+	name := firstMatch[2]
+	c, err := cid.Decode(cidStr)
+	if err != nil {
+		b.tweet(pinUsage+". Make sure your CID is valid", tweet)
+		return
+	}
+
+	err = b.clusterClient.Pin(c, 0, 0, name)
+	if err != nil {
+		log.Println(err)
+		b.tweet("An error happened pinning. I will re-start myself. Please retry in a bit", tweet)
+		b.die <- struct{}{}
+		return
+	}
+	waitParams := client.StatusFilterParams{
 		Cid:       c,
 		Local:     false,
-		Target:    target,
-		CheckFreq: 15 * time.Second,
-	})
-	if err != nil {
-		b.tweet(err.Error(), tweet)
-	} else {
-		b.tweet(fmt.Sprintf("%s %s", target, c), tweet)
+		Target:    api.TrackerStatusPinned,
+		CheckFreq: 10 * time.Second,
 	}
+	ctx, cancel := context.WithTimeout(b.ctx, 10*time.Minute)
+	defer cancel()
+	_, err = client.WaitFor(ctx, b.clusterClient, waitParams)
+	if err != nil {
+		log.Println(err)
+		b.tweet("IPFS Cluster did not manage to pin the item, but it's tracking it", tweet)
+		return
+	}
+
+	b.tweet(fmt.Sprintf("Pinned! Check it out at %s/ipfs/%s", IPFSGateway, cidStr), tweet)
+}
+
+func (b *Bot) unpin(args string, tweet *twitter.Tweet) {
+	log.Println("unpin with ", args)
+	unpinUsage := fmt.Sprintf("Usage: '%s <cid>'", UnpinAction)
+
+	c, err := cid.Decode(args)
+	if err != nil {
+		b.tweet(unpinUsage+". Make sure your CID is valid", tweet)
+		return
+	}
+
+	err = b.clusterClient.Unpin(c)
+	if err != nil && !strings.Contains(err.Error(), "uncommited to state") {
+		log.Println(err)
+		b.tweet("An error happened unpinning. I will re-start myself. Please retry in a bit", tweet)
+		b.die <- struct{}{}
+		return
+	}
+	waitParams := client.StatusFilterParams{
+		Cid:       c,
+		Local:     false,
+		Target:    api.TrackerStatusUnpinned,
+		CheckFreq: 10 * time.Second,
+	}
+	ctx, cancel := context.WithTimeout(b.ctx, time.Minute)
+	defer cancel()
+	_, err = client.WaitFor(ctx, b.clusterClient, waitParams)
+	if err != nil {
+		log.Println(err)
+		b.tweet("IPFS Cluster did not manage to unpin the item, but it's trying...", tweet)
+		return
+	}
+
+	b.tweet(fmt.Sprintf("Unpinned %s! :'(", args), tweet)
+}
+
+func (b *Bot) add(arg string, tweet *twitter.Tweet) {
+	log.Println("add with ", arg)
+	addUsage := fmt.Sprintf("Usage: '%s <http-or-https-url>'")
+	url, err := url.Parse(arg)
+	if err != nil {
+		b.tweet(addUsage+". Make sure you gave a valid url!", tweet)
+		return
+	}
+	if url.Scheme != "http" && url.Scheme != "https" {
+		b.tweet(addUsage+". Not an HTTP(s) url!", tweet)
+		return
+	}
+
+	if url.Host == "localhost" || url.Host == "127.0.0.1" || url.Host == "::1" {
+		b.tweet("ehem ehem...", tweet)
+		return
+	}
+
+	out := make(chan *api.AddedOutput, 1)
+	go func() {
+		cids := []string{}
+		for added := range out {
+			cids = append(cids, added.Hash)
+		}
+		if len(cids) > 0 {
+			b.tweetAdded(cids, tweet)
+		}
+	}()
+
+	params := api.DefaultAddParams()
+	params.Wrap = false
+	params.Name = "Tweet-" + tweet.IDStr
+	err = b.clusterClient.Add([]string{arg}, params, out)
+	if err != nil {
+		log.Println(err)
+		b.tweet("An error happened adding. I will re-start myself. Please retry in a bit", tweet)
+		b.die <- struct{}{}
+		return
+	}
+}
+
+func (b *Bot) tweetAdded(cids []string, tweet *twitter.Tweet) {
+	msg := "Your content has been added to #IPFS Cluster!\n"
+	msg += "Check it out:\n\n"
+	for _, c := range cids {
+		msg += fmt.Sprintf(" > %s/ipfs/%s\n", IPFSGateway, c)
+	}
+	b.tweet(msg, tweet)
+}
+
+func (b *Bot) tweetHelp(tweet *twitter.Tweet) {
+	help := fmt.Sprintf(`Hi! Currently I support:
+
+!pin <cid> name
+!unpin <cid>
+!add <url-to-single-file>
+!help
+
+Happy pinning!
+`, b.name)
+	b.tweet(help, tweet)
 }
 
 func (b *Bot) tweet(msg string, origTweet *twitter.Tweet) {
 	var err error
-	if origTweet != nil {
-		_, _, err = b.twClient.Statuses.Update(
-			fmt.Sprintf("@%s %s", origTweet.User.ScreenName, msg),
-			&twitter.StatusUpdateParams{
-				InReplyToStatusID: origTweet.ID},
-		)
-		if err != nil {
-			log.Println(err)
-		}
-		return
-	}
+	var tweetMsg string = msg
+	var params *twitter.StatusUpdateParams
 
-	_, _, err = b.twClient.Statuses.Update(msg, nil)
+	if origTweet != nil {
+		params = &twitter.StatusUpdateParams{
+			InReplyToStatusID: origTweet.ID,
+		}
+		tweetMsg = fmt.Sprintf("@%s %s", origTweet.User.ScreenName, msg)
+	}
+	log.Println("tweeting: ", tweetMsg)
+
+	_, _, err = b.twClient.Statuses.Update(tweetMsg, params)
+	if err != nil {
+		log.Println(err)
+	}
+	return
 }
 
 func main() {
@@ -302,6 +484,11 @@ func main() {
 	// Wait for SIGINT and SIGTERM (HIT CTRL-C)
 	ch := make(chan os.Signal)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
-	log.Println(<-ch)
+	select {
+	case sig := <-ch:
+		log.Println(sig)
+	case <-bot.die:
+	}
+
 	bot.Kill()
 }
