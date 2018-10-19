@@ -293,6 +293,9 @@ func (b *Bot) processTweet(tweet *twitter.Tweet) {
 		b.tweet("Sorry but I don't follow you yet", tweet)
 		return
 	}
+	if !ok {
+		return
+	}
 	// We follow the user. We do stuff.
 
 	// Process actions
