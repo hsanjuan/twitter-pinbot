@@ -504,12 +504,14 @@ func (b *Bot) tweetAdded(cids []string, tweet *twitter.Tweet) {
 }
 
 func (b *Bot) tweetHelp(tweet *twitter.Tweet) {
-	help := fmt.Sprintf(`Hi! Currently I support:
+	help := fmt.Sprintf(`Hi! Here's what I can do:
 
-!pin <cid> name
+!pin <cid> <name>
 !unpin <cid>
 !add <url-to-single-file>
 !help
+
+You can always prepend these commands mentioning me (%s).
 
 Happy pinning!
 `, b.name)
