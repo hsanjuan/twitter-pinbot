@@ -213,7 +213,7 @@ func (b *Bot) parseTweet(tweet *twitter.Tweet) (Action, string, []string, error)
 	var action Action
 	var arguments string
 
-	if text == string(HelpAction) {
+	if text == " "+string(HelpAction) {
 		return HelpAction, "", []string{}, nil
 	}
 
