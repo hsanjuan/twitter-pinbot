@@ -610,6 +610,7 @@ TWEET:
 		log.Println(err)
 		return
 	}
+	_ = newTweet
 	// if quote { // then retweet my tweet after a minute
 	// 	go func() {
 	// 		time.Sleep(time.Minute)
