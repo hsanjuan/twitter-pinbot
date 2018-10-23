@@ -32,6 +32,8 @@ var ConfigFile = "config.json"
 // Gateway
 var IPFSGateway = "https://ipfs.io"
 
+const twittercom = "twitter.com"
+
 type Action string
 
 // Variables containing the different available actions
@@ -177,10 +179,13 @@ func (b *Bot) fetchFollowing() {
 			log.Println(err)
 		}
 		for _, u := range following.Users {
-			//log.Println("following:", u.ScreenName)
-			b.follows.Store(u.ID, struct{}{})
+			_, old := b.follows.LoadOrStore(u.ID, struct{}{})
+			if !old {
+				log.Println("Friend: ", u.ScreenName)
+			}
 		}
 		nextCursor = following.NextCursor
+		time.Sleep(2 * time.Second)
 	}
 }
 
@@ -195,6 +200,86 @@ func (b *Bot) watchFollowing() {
 	}
 }
 
+func (b *Bot) processTweet(tweet *twitter.Tweet, srcTweet *twitter.Tweet) {
+	if tweet == nil {
+		return
+	}
+
+	if srcTweet == nil {
+		srcTweet = tweet
+	}
+
+	// Skip processing our own tweets (written by us)
+	// and quotes or retweets we've made (origUser is us)
+	// (avoid potential loops)
+	if tweet.User.IDStr == b.ID() || srcTweet.User.IDStr == b.ID() {
+		return
+	}
+
+	action, arguments, urls, err := b.parseTweet(tweet)
+	if err != nil {
+		b.tweet(err.Error(), tweet, srcTweet, false)
+		return
+	}
+
+	log.Printf("Parsed: %s, %s, %s\n", action, arguments, urls)
+
+	_, ok := b.follows.Load(srcTweet.User.ID)
+	if !ok && action.Valid() {
+		b.tweet("Sorry but I don't follow you yet", tweet, srcTweet, false)
+		return
+	}
+	if !ok {
+		return
+	}
+	// We follow the user. We do stuff.
+
+	// Process actions
+	switch action {
+	case PinAction:
+		b.pin(arguments, tweet, srcTweet)
+	case UnpinAction:
+		b.unpin(arguments, tweet, srcTweet)
+	case AddAction:
+		b.add(arguments, tweet, srcTweet)
+	case HelpAction:
+		b.tweetHelp(tweet, srcTweet)
+	default:
+		log.Println("no handled action for this tweet")
+	}
+
+	// Add any media urls
+	if len(urls) > 0 {
+		log.Println("adding media: ", urls)
+		out := make(chan *api.AddedOutput, 1)
+		go func() {
+			cids := []string{}
+			for added := range out {
+				log.Printf("added %s\n", added.Hash)
+				cids = append(cids, added.Hash)
+			}
+			if len(cids) > 0 {
+				b.tweetAdded(cids, tweet, srcTweet)
+			}
+		}()
+		params := api.DefaultAddParams()
+		params.Wrap = true
+		params.Name = "Tweet-" + tweet.IDStr
+		err := b.clusterClient.Add(urls, params, out)
+		if err != nil {
+			log.Println(err)
+		}
+	}
+
+	// If the tweet has retweets, process them as if they were
+	// from this user.
+	retweets := []*twitter.Tweet{tweet.QuotedStatus, tweet.RetweetedStatus}
+	for _, rt := range retweets {
+		b.processTweet(rt, srcTweet)
+	}
+}
+
+// parseTweet returns Action, arguments, media urls, and error
 func (b *Bot) parseTweet(tweet *twitter.Tweet) (Action, string, []string, error) {
 	// Extended tweet? let's use the entities from the extended tweet then.
 	if tweet.ExtendedTweet != nil {
@@ -207,6 +292,8 @@ func (b *Bot) parseTweet(tweet *twitter.Tweet) (Action, string, []string, error)
 	if text == "" {
 		text = tweet.Text
 	}
+
+	log.Println("Parsing:", text)
 
 	// remote our username if they started with it
 	text = strings.TrimPrefix(text, b.name)
@@ -229,23 +316,46 @@ func (b *Bot) parseTweet(tweet *twitter.Tweet) (Action, string, []string, error)
 	return action, arguments, urls, nil
 }
 
+func tweetFile(tweet *twitter.Tweet) {
+
+}
+
+// takes *Entities or *MediaEntities
+func media(ent interface{}) []twitter.MediaEntity {
+	if ent == nil {
+		return nil
+	}
+
+	switch ent.(type) {
+	case *twitter.Entities:
+		e := ent.(*twitter.Entities)
+		if e != nil {
+			return e.Media
+		}
+	case *twitter.ExtendedEntity:
+		e := ent.(*twitter.ExtendedEntity)
+		if e != nil {
+			return e.Media
+		}
+	}
+	return nil
+}
+
 func extractMediaURLs(tweet *twitter.Tweet) []string {
 	var urls []string
+
 	// Grab any media entities from the tweet
-	if tweet.ExtendedEntities != nil &&
-		tweet.ExtendedEntities.Media != nil &&
-		len(tweet.ExtendedEntities.Media) > 0 {
-		for _, media := range tweet.ExtendedEntities.Media {
-			urls = append(urls, extractMediaURL(&media))
-		}
-	} else if tweet.Entities != nil && tweet.Entities.Media != nil {
+	for _, m := range media(tweet.ExtendedEntities) {
+		urls = append(urls, extractMediaURL(&m))
+	}
+
+	if len(urls) == 0 {
 		// If no extended entitites, try with traditional.
-		for _, media := range tweet.Entities.Media {
-			urls = append(urls, extractMediaURL(&media))
+		for _, m := range media(tweet.Entities) {
+			urls = append(urls, extractMediaURL(&m))
 		}
 	}
 	return urls
-
 }
 
 type byBitrate []twitter.VideoVariant
@@ -277,6 +387,7 @@ func (b *Bot) watchTweets() {
 			UnpinAction.String(),
 			HelpAction.String(),
 			AddAction.String(),
+			b.Name(),
 		},
 		StallWarnings: twitter.Bool(true),
 	}
@@ -287,7 +398,9 @@ func (b *Bot) watchTweets() {
 	}
 
 	demux := twitter.NewSwitchDemux()
-	demux.Tweet = b.processTweet
+	demux.Tweet = func(t *twitter.Tweet) {
+		b.processTweet(t, t)
+	}
 	for {
 		select {
 		case <-b.ctx.Done():
@@ -299,88 +412,13 @@ func (b *Bot) watchTweets() {
 	}
 }
 
-func (b *Bot) processTweet(tweet *twitter.Tweet) {
-	log.Printf("Parsing %+v\n", tweet.Text)
-	//log.Printf("%+v\n", tweet.User)
-
-	action, arguments, urls, err := b.parseTweet(tweet)
-	if err != nil {
-		b.tweet(err.Error(), tweet)
-		return
-	}
-
-	log.Printf("Parsed: %s, %s, %s\n", action, arguments, urls)
-
-	_, ok := b.follows.Load(tweet.User.ID)
-	if !ok && action.Valid() {
-		b.tweet("Sorry but I don't follow you yet", tweet)
-		return
-	}
-	if !ok {
-		return
-	}
-	// We follow the user. We do stuff.
-
-	// Process actions
-	switch action {
-	case PinAction:
-		b.pin(arguments, tweet)
-	case UnpinAction:
-		b.unpin(arguments, tweet)
-	case AddAction:
-		b.add(arguments, tweet)
-	case HelpAction:
-		b.tweetHelp(tweet)
-	default:
-		log.Println("no handled action for this tweet")
-	}
-
-	// Add any media urls
-	if len(urls) > 0 {
-		log.Println("adding media: ", urls)
-		out := make(chan *api.AddedOutput, 1)
-		go func() {
-			cids := []string{}
-			for added := range out {
-				log.Printf("added %s\n", added.Hash)
-				cids = append(cids, added.Hash)
-			}
-			if len(cids) > 0 {
-				b.tweetAdded(cids, tweet)
-			}
-		}()
-		params := api.DefaultAddParams()
-		params.Wrap = true
-		params.Name = "Tweet-" + tweet.IDStr
-		err := b.clusterClient.Add(urls, params, out)
-		if err != nil {
-			log.Println(err)
-		}
-	}
-
-	// If the tweet has retweets, process them as if they were
-	// from this user.
-	retweets := []*twitter.Tweet{tweet.QuotedStatus, tweet.RetweetedStatus}
-	for _, rt := range retweets {
-		if rt == nil {
-			continue
-		}
-
-		// process the retweet as if it was from original user
-		rt.User.ID = tweet.User.ID
-		rt.User.ScreenName = tweet.User.ScreenName
-		rt.ID = tweet.ID
-		b.processTweet(rt)
-	}
-}
-
-func (b *Bot) pin(args string, tweet *twitter.Tweet) {
+func (b *Bot) pin(args string, tweet, srcTweet *twitter.Tweet) {
 	log.Println("pin with ", args)
 	pinUsage := fmt.Sprintf("Usage: '%s <cid> <name>'", PinAction)
 
 	matches := pinRegexp.FindAllStringSubmatch(args, -1)
 	if len(matches) == 0 {
-		b.tweet(pinUsage, tweet)
+		b.tweet(pinUsage, srcTweet, nil, false)
 		return
 	}
 
@@ -389,14 +427,14 @@ func (b *Bot) pin(args string, tweet *twitter.Tweet) {
 	name := firstMatch[2]
 	c, err := cid.Decode(cidStr)
 	if err != nil {
-		b.tweet(pinUsage+". Make sure your CID is valid", tweet)
+		b.tweet(pinUsage+". Make sure your CID is valid.", tweet, srcTweet, false)
 		return
 	}
 
 	err = b.clusterClient.Pin(c, 0, 0, name)
 	if err != nil {
 		log.Println(err)
-		b.tweet("An error happened pinning. I will re-start myself. Please retry in a bit", tweet)
+		b.tweet("An error happened pinning. I will re-start myself. Please retry in a bit.", srcTweet, nil, false)
 		b.die <- struct{}{}
 		return
 	}
@@ -411,27 +449,27 @@ func (b *Bot) pin(args string, tweet *twitter.Tweet) {
 	_, err = client.WaitFor(ctx, b.clusterClient, waitParams)
 	if err != nil {
 		log.Println(err)
-		b.tweet("IPFS Cluster did not manage to pin the item, but it's tracking it", tweet)
+		b.tweet("IPFS Cluster did not manage to pin the item, but it's tracking it.", srcTweet, nil, false)
 		return
 	}
 
-	b.tweet(fmt.Sprintf("Pinned! Check it out at %s/ipfs/%s", IPFSGateway, cidStr), tweet)
+	b.tweet(fmt.Sprintf("Pinned! Check it out at %s/ipfs/%s", IPFSGateway, cidStr), tweet, srcTweet, true)
 }
 
-func (b *Bot) unpin(args string, tweet *twitter.Tweet) {
+func (b *Bot) unpin(args string, tweet, srcTweet *twitter.Tweet) {
 	log.Println("unpin with ", args)
 	unpinUsage := fmt.Sprintf("Usage: '%s <cid>'", UnpinAction)
 
 	c, err := cid.Decode(args)
 	if err != nil {
-		b.tweet(unpinUsage+". Make sure your CID is valid", tweet)
+		b.tweet(unpinUsage+". Make sure your CID is valid.", tweet, srcTweet, false)
 		return
 	}
 
 	err = b.clusterClient.Unpin(c)
 	if err != nil && !strings.Contains(err.Error(), "uncommited to state") {
 		log.Println(err)
-		b.tweet("An error happened unpinning. I will re-start myself. Please retry in a bit", tweet)
+		b.tweet("An error happened unpinning. I will re-start myself. Please retry in a bit.", srcTweet, nil, false)
 		b.die <- struct{}{}
 		return
 	}
@@ -446,28 +484,28 @@ func (b *Bot) unpin(args string, tweet *twitter.Tweet) {
 	_, err = client.WaitFor(ctx, b.clusterClient, waitParams)
 	if err != nil {
 		log.Println(err)
-		b.tweet("IPFS Cluster did not manage to unpin the item, but it's trying...", tweet)
+		b.tweet("IPFS Cluster did not manage to unpin the item, but it's trying...", srcTweet, nil, false)
 		return
 	}
 
-	b.tweet(fmt.Sprintf("Unpinned %s! :'(", args), tweet)
+	b.tweet(fmt.Sprintf("Unpinned %s! :'(", args), tweet, srcTweet, false)
 }
 
-func (b *Bot) add(arg string, tweet *twitter.Tweet) {
+func (b *Bot) add(arg string, tweet, srcTweet *twitter.Tweet) {
 	log.Println("add with ", arg)
 	addUsage := fmt.Sprintf("Usage: '%s <http-or-https-url>'")
 	url, err := url.Parse(arg)
 	if err != nil {
-		b.tweet(addUsage+". Make sure you gave a valid url!", tweet)
+		b.tweet(addUsage+". Make sure you gave a valid url!", srcTweet, nil, false)
 		return
 	}
 	if url.Scheme != "http" && url.Scheme != "https" {
-		b.tweet(addUsage+". Not an HTTP(s) url!", tweet)
+		b.tweet(addUsage+". Not an HTTP(s) url!", srcTweet, nil, false)
 		return
 	}
 
 	if url.Host == "localhost" || url.Host == "127.0.0.1" || url.Host == "::1" {
-		b.tweet("ehem ehem...", tweet)
+		b.tweet("ehem ehem...", srcTweet, nil, false)
 		return
 	}
 
@@ -478,32 +516,35 @@ func (b *Bot) add(arg string, tweet *twitter.Tweet) {
 			cids = append(cids, added.Hash)
 		}
 		if len(cids) > 0 {
-			b.tweetAdded(cids, tweet)
+			b.tweetAdded(cids, tweet, srcTweet)
 		}
 	}()
 
 	params := api.DefaultAddParams()
-	params.Wrap = false
+	params.Wrap = true
 	params.Name = "Tweet-" + tweet.IDStr
 	err = b.clusterClient.Add([]string{arg}, params, out)
 	if err != nil {
 		log.Println(err)
-		b.tweet("An error happened adding. I will re-start myself. Please retry in a bit", tweet)
+		b.tweet("An error happened adding. I will re-start myself. Please retry in a bit.", srcTweet, nil, false)
 		b.die <- struct{}{}
 		return
 	}
 }
 
-func (b *Bot) tweetAdded(cids []string, tweet *twitter.Tweet) {
-	msg := "Your content has been added to #IPFS Cluster!\n"
-	msg += "Check it out:\n\n"
-	for _, c := range cids {
-		msg += fmt.Sprintf(" > %s/ipfs/%s\n", IPFSGateway, c)
+func (b *Bot) tweetAdded(cids []string, tweet, srcTweet *twitter.Tweet) {
+	msg := "Just added this to #IPFS Cluster!\n\n"
+	for i, c := range cids {
+		if i != len(cids)-1 {
+			msg += fmt.Sprintf("• File: %s/ipfs/%s\n", IPFSGateway, c)
+		} else { // last
+			msg += fmt.Sprintf("• Folder-wrap: %s/ipfs/%s\n", IPFSGateway, c)
+		}
 	}
-	b.tweet(msg, tweet)
+	b.tweet(msg, tweet, srcTweet, true)
 }
 
-func (b *Bot) tweetHelp(tweet *twitter.Tweet) {
+func (b *Bot) tweetHelp(tweet, srcTweet *twitter.Tweet) {
 	help := fmt.Sprintf(`Hi! Here's what I can do:
 
 !pin <cid> <name>
@@ -515,27 +556,76 @@ You can always prepend these commands mentioning me (%s).
 
 Happy pinning!
 `, b.name)
-	b.tweet(help, tweet)
+	b.tweet(help, srcTweet, nil, false)
 }
 
-func (b *Bot) tweet(msg string, origTweet *twitter.Tweet) {
-	var err error
-	var tweetMsg string = msg
-	var params *twitter.StatusUpdateParams
+// tweets sends a tweet quoting or replying to the given tweets. srcTweet might
+// be nil.
+// Otherwise it just posts the message.
+func (b *Bot) tweet(msg string, inReplyTo, srcTweet *twitter.Tweet, quote bool) {
+	tweetMsg := ""
+	params := &twitter.StatusUpdateParams{}
+	sameTweets := false
 
-	if origTweet != nil {
-		params = &twitter.StatusUpdateParams{
-			InReplyToStatusID: origTweet.ID,
-		}
-		tweetMsg = fmt.Sprintf("@%s %s", origTweet.User.ScreenName, msg)
+	if inReplyTo == nil {
+		tweetMsg = msg
+		goto TWEET
 	}
-	log.Println("tweeting: ", tweetMsg)
 
-	_, _, err = b.twClient.Statuses.Update(tweetMsg, params)
+	sameTweets = srcTweet == nil || inReplyTo.ID == srcTweet.ID
+	params.InReplyToStatusID = inReplyTo.ID
+
+	switch {
+	case sameTweets && !quote:
+		// @user msg (reply thread)
+		tweetMsg = fmt.Sprintf("@%s %s", inReplyTo.User.ScreenName, msg)
+	case sameTweets && quote:
+		// @user msg <permalink> (quote RT)
+		tweetMsg = fmt.Sprintf(".@%s %s %s",
+			inReplyTo.User.ScreenName,
+			msg,
+			permaLink(inReplyTo),
+		)
+	case !sameTweets && !quote:
+		// @user @srcUser msg (reply thread)
+		tweetMsg = fmt.Sprintf("@%s @%s %s",
+			inReplyTo.User.ScreenName,
+			srcTweet.User.ScreenName,
+			msg,
+		)
+	case !sameTweets && quote:
+		// @srcuser <replyPermalink> (quote RT mentioning src user)
+		tweetMsg = fmt.Sprintf(".@%s %s %s",
+			srcTweet.User.ScreenName,
+			msg,
+			permaLink(inReplyTo),
+		)
+
+	}
+
+TWEET:
+	log.Println("tweeting:", tweetMsg)
+	newTweet, _, err := b.twClient.Statuses.Update(tweetMsg, params)
 	if err != nil {
 		log.Println(err)
+		return
 	}
+	// if quote { // then retweet my tweet after a minute
+	// 	go func() {
+	// 		time.Sleep(time.Minute)
+	// 		_, _, err := b.twClient.Statuses.Retweet(newTweet.ID, nil)
+	// 		log.Println("retweeted: ", tweetMsg)
+	// 		if err != nil {
+	// 			log.Println(err)
+	// 			return
+	// 		}
+	// 	}()
+	// }
 	return
+}
+
+func permaLink(tweet *twitter.Tweet) string {
+	return fmt.Sprintf("https://%s/%s/status/%s", twittercom, tweet.User.ScreenName, tweet.IDStr)
 }
 
 func main() {
