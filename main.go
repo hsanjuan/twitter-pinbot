@@ -255,8 +255,8 @@ func (b *Bot) processTweet(tweet *twitter.Tweet, srcTweet *twitter.Tweet) {
 		go func() {
 			cids := []string{}
 			for added := range out {
-				log.Printf("added %s\n", added.Hash)
-				cids = append(cids, added.Hash)
+				log.Printf("added %s\n", added.Cid)
+				cids = append(cids, added.Cid)
 			}
 			if len(cids) > 0 {
 				b.tweetAdded(cids, tweet, srcTweet)
@@ -513,7 +513,7 @@ func (b *Bot) add(arg string, tweet, srcTweet *twitter.Tweet) {
 	go func() {
 		cids := []string{}
 		for added := range out {
-			cids = append(cids, added.Hash)
+			cids = append(cids, added.Cid)
 		}
 		if len(cids) > 0 {
 			b.tweetAdded(cids, tweet, srcTweet)
