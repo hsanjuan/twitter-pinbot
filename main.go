@@ -39,10 +39,10 @@ type Action string
 // Variables containing the different available actions
 var (
 	// (spaces)(action)whitespaces(arguments)
-	actionRegexp = regexp.MustCompile(`^\s*([[:graph:]]+)\s+(.+)$`)
+	actionRegexp = regexp.MustCompile(`^\s*([[:graph:]]+)\s+(.+)`)
 	// (cid)whitespaces(name with whitespaces). [:graph:] does not
 	// match line breaks or spaces.
-	pinRegexp          = regexp.MustCompile(`([[:graph:]]+)\s+([[:graph:] ]+)`)
+	pinRegexp          = regexp.MustCompile(`([[:graph:]]+)\s+([[:graph:]\s]+)`)
 	PinAction   Action = "!pin"
 	UnpinAction Action = "!unpin"
 	AddAction   Action = "!add"
