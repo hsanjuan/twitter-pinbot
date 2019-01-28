@@ -450,7 +450,7 @@ func (b *Bot) pin(args string, tweet, srcTweet *twitter.Tweet) {
 	_, err = client.WaitFor(ctx, b.clusterClient, waitParams)
 	if err != nil {
 		log.Println(err)
-		b.tweet("IPFS Cluster did not manage to pin the item, but it's tracking it.", srcTweet, nil, false)
+		b.tweet("IPFS Cluster has been pinning this for 10 mins. This is normal for big files. Otherwise, make sure there are providers for it. Don't worry, Cluster will keep at it for a week before giving up.", srcTweet, nil, false)
 		return
 	}
 
