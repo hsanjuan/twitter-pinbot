@@ -266,7 +266,7 @@ func (b *Bot) processTweet(tweet *twitter.Tweet, srcTweet *twitter.Tweet) {
 		params := api.DefaultAddParams()
 		params.Wrap = true
 		params.Name = "Tweet-" + tweet.IDStr
-		err := b.clusterClient.Add(urls, params, out)
+		err := b.clusterClient.Add(context.Background(), urls, params, out)
 		if err != nil {
 			log.Println(err)
 		}
@@ -432,7 +432,7 @@ func (b *Bot) pin(args string, tweet, srcTweet *twitter.Tweet) {
 		return
 	}
 
-	err = b.clusterClient.Pin(c, 0, 0, name)
+	err = b.clusterClient.Pin(context.Background(), c, api.PinOptions{Name: name})
 	if err != nil {
 		log.Println(err)
 		b.tweet("An error happened pinning. I will re-start myself. Please retry in a bit.", srcTweet, nil, false)
@@ -467,7 +467,7 @@ func (b *Bot) unpin(args string, tweet, srcTweet *twitter.Tweet) {
 		return
 	}
 
-	err = b.clusterClient.Unpin(c)
+	err = b.clusterClient.Unpin(context.Background(), c)
 	if err != nil && !strings.Contains(err.Error(), "uncommited to state") {
 		log.Println(err)
 		b.tweet("An error happened unpinning. I will re-start myself. Please retry in a bit.", srcTweet, nil, false)
@@ -524,7 +524,7 @@ func (b *Bot) add(arg string, tweet, srcTweet *twitter.Tweet) {
 	params := api.DefaultAddParams()
 	params.Wrap = true
 	params.Name = "Tweet-" + tweet.IDStr
-	err = b.clusterClient.Add([]string{arg}, params, out)
+	err = b.clusterClient.Add(context.Background(), []string{arg}, params, out)
 	if err != nil {
 		log.Println(err)
 		b.tweet("An error happened adding. I will re-start myself. Please retry in a bit.", srcTweet, nil, false)
