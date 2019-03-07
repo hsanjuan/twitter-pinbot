@@ -254,7 +254,7 @@ func (b *Bot) processTweet(tweet *twitter.Tweet, srcTweet *twitter.Tweet) {
 		log.Println("adding media: ", urls)
 		out := make(chan *api.AddedOutput, 1)
 		go func() {
-			cids := []string{}
+			cids := []cid.Cid{}
 			for added := range out {
 				log.Printf("added %s\n", added.Cid)
 				cids = append(cids, added.Cid)
@@ -512,7 +512,7 @@ func (b *Bot) add(arg string, tweet, srcTweet *twitter.Tweet) {
 
 	out := make(chan *api.AddedOutput, 1)
 	go func() {
-		cids := []string{}
+		cids := []cid.Cid{}
 		for added := range out {
 			cids = append(cids, added.Cid)
 		}
@@ -533,7 +533,7 @@ func (b *Bot) add(arg string, tweet, srcTweet *twitter.Tweet) {
 	}
 }
 
-func (b *Bot) tweetAdded(cids []string, tweet, srcTweet *twitter.Tweet) {
+func (b *Bot) tweetAdded(cids []cid.Cid, tweet, srcTweet *twitter.Tweet) {
 	msg := "Just added this to #IPFS Cluster!\n\n"
 	for i, c := range cids {
 		if i != len(cids)-1 {
