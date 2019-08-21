@@ -1,20 +1,17 @@
-FROM golang:1.11-stretch
+FROM golang:1.12-stretch
 MAINTAINER Hector Sanjuan <hector@protocol.ai>
 
 # This dockerfile builds and runs twitter-bot
 
 ENV GOPATH /go
 ENV SRC_PATH $GOPATH/src/github.com/hsanjuan/twitter-pinbot
+ENV GO111MODULE on
+ENV GOPROXY https://proxy.golang.org
 
 COPY . $SRC_PATH
 WORKDIR $SRC_PATH
 
-RUN go get -u github.com/whyrusleeping/gx \
-    && go get -u github.com/whyrusleeping/gx-go \
-    && gx install --global \
-    && gx-go rw \
-    && go get ./... \
-    && go install
+RUN go install
 
 VOLUME /data
 

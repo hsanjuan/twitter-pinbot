@@ -432,7 +432,7 @@ func (b *Bot) pin(args string, tweet, srcTweet *twitter.Tweet) {
 		return
 	}
 
-	err = b.clusterClient.Pin(context.Background(), c, api.PinOptions{Name: name})
+	_, err = b.clusterClient.Pin(context.Background(), c, api.PinOptions{Name: name})
 	if err != nil {
 		log.Println(err)
 		b.tweet("An error happened pinning. I will re-start myself. Please retry in a bit.", srcTweet, nil, false)
@@ -467,7 +467,7 @@ func (b *Bot) unpin(args string, tweet, srcTweet *twitter.Tweet) {
 		return
 	}
 
-	err = b.clusterClient.Unpin(context.Background(), c)
+	_, err = b.clusterClient.Unpin(context.Background(), c)
 	if err != nil && !strings.Contains(err.Error(), "uncommited to state") {
 		log.Println(err)
 		b.tweet("An error happened unpinning. I will re-start myself. Please retry in a bit.", srcTweet, nil, false)
