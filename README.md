@@ -1,8 +1,8 @@
 # twitter-pinbot
 
-A Twitter bot to pin things on IPFS Cluster.
+A Twitter bot to pin things on [IPFS Cluster](https://cluster.ipfs.io).
 
-Run with a config file like:
+Assuming you have a working IPFS Cluster, you can run with a config file like:
 
 ```js
 {
@@ -18,4 +18,10 @@ Run with a config file like:
 }
 ```
 
-When [running the Docker container](https://hub.docker.com/r/hsanjuan/twitter-pinbot), mount `/data/config.json` 
+When [running the Docker container](https://hub.docker.com/r/hsanjuan/twitter-pinbot), mount the configuration into `/data/config.json` 
+
+## Tutorial
+
+A full tutorial covering how to set up all the pieces is available here:
+
+https://simpleaswater.com/ipfs-cluster-twitter-pinbot/
