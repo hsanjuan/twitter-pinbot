@@ -1,4 +1,4 @@
-FROM golang:1.12-stretch
+FROM golang:1.15-stretch
 MAINTAINER Hector Sanjuan <hector@protocol.ai>
 
 # This dockerfile builds and runs twitter-bot
